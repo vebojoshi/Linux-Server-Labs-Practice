@@ -1,0 +1,1472 @@
+ 1)-------------------------/apache-server--------------------------------------------------------
+
+Install the Apache package. Allow it to get documents stored on NFS mounted directories.
+
+# yum install -y httpd
+# firewall-cmd –permanent –add-service=http
+# firewall-cmd –reload
+# systemctl enable httpd
+# systemctl start httpd
+# getsebool -a | grep nfs | grep httpd
+# setsebool -P httpd_use_nfs on
+
+ 2)--------------------------/SE-LINUX---------------------------------------------------------------------
+
+Assign the same SELinux contexts used by the home directories to the /xfs directory permanently.
+
+# yum install -y setroubleshoot-server
+# semanage fcontext -a -t user_home_dir_t “/xfs(/.*)?”
+# restorecon -R /xfs
+ 
+ 3)---------------------------/LinuxUser--------------------------------------------------------------------
+
+Create two users: john with uid/gid equal to 2000, password 12345678 and davis with uid/gid equal to 3000,
+password 87654321. Make davis‘ account validity stopping in one month.
+
+# useradd -u 2000 john
+# passwd john
+New password: 12345678
+# useradd -u 3000 davis
+# passwd davis
+New password: 87654321
+# date -d “+1month”
+# usermod -e YYYY-MM-DD davis
+or # chage -E YYYY-MM-DD davis
+# chage -l davis
+
+ 4)-----------------------------------------------------------------------------------------------
+ 
+ Allow davis (and only davis) to get full access to john‘s home directory.
+
+# setfacl -R -m u:davis:rwx /home/john
+
+ 5)-------------------------------------------------------------------------------------------------
+
+Create a directory named /common. Allow john and davis to share documents in the /common directory using a 
+group called team. Both of them can read, write and remove documents from the other 
+in this directory but any user not member of the group can’t.
+
+# mkdir /common
+# groupadd -g 50000 team
+# chgrp team /common
+# chmod 2770 /common
+# usermod -aG team john
+# usermod -aG team davis
+
+ 6)-------------------------------------------------------------------------------------------------
+
+Create a xfs file system on a new logical volume of 100MB called lv_xfs. Mount it permanently with uuid under /xfs.
+
+# lvcreate –size 100M –name lv_xfs /dev/vg
+# mkfs.xfs /dev/vg/lv_xfs
+# mkdir /xfs
+# blkid | grep lv_xfs >> /etc/fstab
+# vi /etc/fstab
+UUID=… /xfs xfs defaults 1 2
+# mount -a
+
+
+ 7)-------------------------------------------------------------------------------------------------
+
+Write a Bash script called prog.sh in the /root directory that creates 40 files of 2MB each with the fallocate command in the
+mounted /xfs directory. Each file has got a name as follows: .file_N where N is a number from 1 to 40.
+
+cd /root
+vi prog.sh
+#!/bin/bash
+
+cd /xfs
+N=40
+while [ “$N” -gt 0 ]
+do
+fallocate -l 2M .file_$N
+N=`expr $N – 1`
+done
+——————–
+# chmod u+x prog.sh
+# ./prog.sh
+
+  8)----------------------------------------------------------------------------------------------
+
+Create an ext4 file system on a new logical volume of 100MB called lv_ext4. Mount it permanently
+under the /ext4 directory. Copy the files previously created into this new space.
+
+# lvcreate –size 100M –name lv_ext4 /dev/vg
+# mkfs.ext4 /dev/vg/lv_ext4
+# mkdir /ext4
+# vi /etc/fstab
+/dev/vg/lv_ext4 /ext4 ext4 defaults 1 2
+# cp -p /xfs/.f* /ext4
+
+  9)-------------------------------------------------------------------------------------------------
+Configure a virtual console
+# grubby –update-kernel=ALL –args=”console=ttyS0″
+
+  10)----------------------------------------------------------------------------------------------
+Create a logical volume of 200MB called lv_swap2 and add it permanently to the current swap space.
+
+# lvcreate –size 200M –name lv_swap2 /dev/vg
+# mkswap /dev/vg/lv_swap2
+# swapon /dev/vg/lv_swap2
+vi /etc/fstab
+/dev/vg/lv_swap2 swap swap defaults 0 0
+
+  11)---------------------------------------------------------------------------------------------
+Create a cron job running as root, starting at 11PM every day and writing a 
+report on daily system resource consumption in the /var/log/consumption.log file.
+
+# crontab -e
+00 23 * * * /usr/bin/sar -A > /var/log/consumption.log
+
+  12)----------------------------------------------------------------------------------------------
+Set the default target to boot into X Window level (previously level 5).
+
+systemctl set-default graphical.target
+  
+  13)-------------------------------------------------------------------------------------------------
+Change the hostname to mycentos.example.com
+
+hostnamectl set-hostname mycentos.example.com
+  14)---------------------------------------------------------------------------------------------
+
+Extend the existing xfs file system to a total size of 200MB and add a label called myFS.
+
+# lvextend –size 200M -r /dev/vg/lv_xfs
+or # lvextend –size +100M -r /dev/vg/lv_xfs
+# umount /xfs
+# xfs_admin -L “myFS” /dev/vg/lv_xfs
+# mount /xfs
+
+ 15)ACL---------------------------------------------------------------------------------------------
+			1. Create a second user on the system called "starbuck".  Open a second terminal window into the 
+			lab server connected as the user starbuck. Ensure you're working as a priviledged user 
+			(sudo) or root user while perofrming the lab. The starbuck user will be used to test setting the permissions.
+
+			[root@localhost ~]# useradd starbuck; passwd starbuck
+			Changing password for user starbuck.
+			New password: 
+			Retype new password: 
+			passwd: all authentication tokens updated successfully.
+
+			----------------------------------------------------------------------------
+			2. Navigate into the /tmp directory and create two new directories named dir1 and dir2 and 
+			two files called file1 and file2.
+
+			[root@localhost tmp]# mkdir {dir1,dir2}; touch {file1,file2}
+
+			----------------------------------------------------------------------------
+			3. Idenity if any of the files currently have extended access control lists associated with them.
+
+			[root@localhost tmp]# ls -l
+
+			total 0
+
+			drwxr-xr-x. 2 root root 6 May  5 20:00 dir1
+			drwxr-xr-x. 2 root root 6 May  5 20:00 dir2
+			-rw-r--r--. 1 root root 0 May  5 20:00 file1
+			-rw-r--r--. 1 root root 0 May  5 20:00 file2
+
+			Note: The files have base ACLs but do not have extended ACLs. We know they do not have extended 
+			ACLs because of no + at the end of the permissions listed.
+
+			----------------------------------------------------------------------------
+			4. Set an ACL for the starbuck user to read and write for file1
+
+			[root@localhost tmp]# setfacl -m u:starbuck:rw file1
+			[root@localhost tmp]# getfacl file1
+
+			# file: file1
+			# owner: root
+			# group: root
+
+			user::rw-
+			user:starbuck:rw-
+			group::r--
+			mask::rw-
+			other::r--
+			----------------------------------------------------------------------------
+			5. Set the mask on the file1 to read only, then as the starbuck user in your second terminal, 
+			attempt to execute the following command echo "test" > /tmp/file1. Explain why this did not work.
+
+			[root@localhost tmp]# setfacl -m m::r file1
+			[root@localhost tmp]# getfacl file1
+
+			# file: file1
+			# owner: root
+			# group: root
+
+			user::rw-
+			user:starbuck:rw- #effective:r--
+			group::r--
+			mask::r--
+			other::r--
+
+			Starbuck's Terminal
+
+			[starbuck@localhost tmp]$ echo "test "> /tmp/file1
+			-bash: /tmp/file1: Permission denied
+
+			Summary: Starbuck was unable to write to file1 even though starbuck had an ACL with rw the mask 
+			was setting the "maximum" permissions to r and was masking w.
+
+			----------------------------------------------------------------------------
+			6. Set the default permissions on dir1 to read write and execute for the starbuck user 
+			(execute ONLY if it is a directory).
+
+			[root@localhost tmp]# setfacl -d -m u:starbuck:rwX dir1
+			[root@localhost tmp]# getfacl dir1
+
+			# file: dir1
+			# owner: root
+			# group: root
+
+			user::rwx
+			group::r-x
+			other::r-x
+			default:user::rwx
+			default:user:starbuck:rwx
+			default:group::r-x
+			default:mask::rwx
+			default:other::r-x
+
+			----------------------------------------------------------------------------
+			7. Using setfacl change the "other" permissions to none on file1
+
+			[root@localhost tmp]# setfacl -m o::- file1
+			[root@localhost tmp]# ls -l
+
+			total 8
+
+			drwxr-xr-x+ 2 root root 6 May  5 20:00 dir1
+			drwxr-xr-x. 2 root root 6 May  5 20:00 dir2
+			-rw-rw----+ 1 root root 0 May  5 20:00 file1
+			-rw-r--r--. 1 root root 0 May  5 20:00 file2
+			----------------------------------------------------------------------------
+			8. Remove the default permissions from dir1
+
+			[root@localhost tmp]# setfacl --remove-default dir1
+			[root@localhost tmp]# getfacl dir1
+
+			# file: dir1
+			# owner: root
+			# group: root
+
+			user::rwx
+			group::r-x
+			other::r-x
+
+			----------------------------------------------------------------------------
+			9. Remove all ACLs on file1
+
+			[root@localhost tmp]# setfacl --remove-all file1
+			[root@localhost tmp]# getfacl file1
+
+			# file: file1
+			# owner: root
+			# group: root
+
+			user::rw-
+			group::r--
+			other::---
+			----------------------------------------------------------------------------
+
+
+ 16)Active Directory---------------------------------------------------------------------------------------------
+
+		       yum -y upgrade
+		       ping ad.linuxacademy.com
+		       hostname
+		       ping ad.linuxacademy.com
+		       yum -y upgrade
+		       yum install realmd
+		       realm discover ad.linuxacademy.com
+		       yum install oddjob oddjob-mkhomedir sssd adcli samba-common
+		       realm join ad.linuxacademy.com
+		       realm discover ad.linuxacademy.com
+		       realm permit --realm ad.linuxacademy.com --all
+		       vi /etc/ssh/sshd_config
+		       systemctl restart sshd
+
+  17)Compress/Decompress---------------------------------------------------------------------------------------------
+
+
+					1. While working in the user root's home directory, create a tar archive of the entire /var/log directory and name the tar file logs.tar.
+
+					[root@localhost ~]# 	tar -cvf logs.tar /var/log
+					----------------------------------------------------------------------------
+					2. List the contents of the tar archive into standard output.
+
+					[root@localhost ~]# 	tar -tf logs.tar
+					----------------------------------------------------------------------------
+					3. Using gzip, compress the tar file appropriately.
+
+					[root@localhost ~]# 	gzip logs.tar
+					----------------------------------------------------------------------------
+					4. Extract the contents of the log.tar.gz directory into /root/var/log.
+
+					[root@localhost ~]# 	tar -zxvf logs.tar.gz
+					----------------------------------------------------------------------------
+					5. Using star, create an archive of the contents of the newly created log directory in /root/var/log into a
+					tar file called user-logs.tar. Be sure to preserve the entire path structure so that the archive indicates 
+					exactly where the file belonged. ie. /root/var/log should preceed every file in the archive.
+
+					[root@localhost ~]# 	yum install star
+					[root@localhost ~]# 	star -c /root/var/log f=user-logs.tar 
+					
+					star: 205 blocks + 0 bytes (total of 2099200 bytes = 2050.00k).
+					----------------------------------------------------------------------------
+					6. List the contents of the star tar file.
+
+					[root@localhost ~]# 	star -t f=user-logs.tar
+					----------------------------------------------------------------------------
+					7. Compress the star archive into a bzip2 compressed file.
+
+					[root@localhost ~]# 	yum install bzip2
+					[root@localhost ~]# 	bzip2 user-logs.tar
+					----------------------------------------------------------------------------
+					8. Decompress the star archive into the /root home directory. 
+
+					[root@localhost root]# star -bz -x f=user-logs.tar.bz2
+					----------------------------------------------------------------------------
+
+
+  18)Create Local Repo---------------------------------------------------------------------------------------------
+
+
+					1. Mount the rhel-server-7.1-x86_64-dvd.iso located in /root home directory to /repos/local (be sure to create /repos/local).
+
+					[root@localhost ~]# mkdir -p /repos/local
+					[root@localhost ~]# mount -o loop rhel-server-7.1-x86_64-dvd.iso /repos/local
+					mount: /dev/loop0 is write-protected, mounting read-only
+					----------------------------------------------------------------------------
+					2. Manually create the repo configuration file in the proper location with the proper information, assume no GPG.
+
+					[root@localhost ~]# vim /etc/yum.repos.d/local.repo
+					[local-repo]
+
+					name=Red Hat Linux Local Repo
+					baseurl=file:///repos/local
+					enabled=1 
+					gpgcheck=0
+					----------------------------------------------------------------------------
+					3. For testing, disable or delete all other repos except the local repo. Please note, if you delete them you will need to rebuild your lab server.
+
+					4. Clean previous yum repo information (clean the cache)
+
+					[root@localhost ~]# yum clean all
+					----------------------------------------------------------------------------
+					5. View all enabled repos.
+
+					[root@localhost ~]# yum repolist
+					----------------------------------------------------------------------------
+					6. Download and install emcas and, on the install screen, verify it is being installed from the local-repo.
+
+					[root@localhost ~]# yum install emacs
+					----------------------------------------------------------------------------
+					7. Remove emacs.
+
+					[root@localhost ~]# yum remove emacs
+					----------------------------------------------------------------------------
+					8. Configure the local.repo to use GPG to verify that the packages are legitimate. (This is most commonly used for remote repositories. However, for the exercise it will be easier since it's all included as part of the iso and local machine.)
+
+					 [local-repo]
+
+					 name=Red Hat Linux Local Repo
+
+					 baseurl=file:///repos/local
+
+					 enabled=1
+
+					 gpgcheck=1
+
+					 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+					----------------------------------------------------------------------------
+
+  19)CRON Job's---------------------------------------------------------------------------------------------
+
+
+					1. Write a command that issues a statement to the system log with the current uptime information.
+					Schedule this command to run one minute from now.
+
+					[root@localhost]# at now +1 minute
+
+					at> logger "The system current uptime is $(uptime)"
+					----------------------------------------------------------------------------
+					2. Wait one minute and check the system log to view the entry. 
+
+					[roo@localhost]# journalctl -f
+					----------------------------------------------------------------------------
+					3. Create a new at job that runs at teatime but performs the same log entry as step 1.
+
+					[root@localhost]# at teatime
+
+					at> logger "The system current uptime is $(uptime)"
+					----------------------------------------------------------------------------
+					4. Turn the uptime script from step one into an executable script file located in /home/user/ called uptimelog.
+
+					[root@localhost]# vim /home/user/uptimelog
+
+					logger "The system current uptime is $(uptime)"
+
+					[root@localhost]# chmod +x /home/user/uptimelog
+					----------------------------------------------------------------------------
+					5. Schedule an anacronjob so that the script runs every 5 days if it has not currently been run; make sure
+					the job name is uptimelog.
+
+					Note: place the entry at the top of the other entries so it is run first.
+
+					[root@localhost]# vim /etc/anacrontab
+					----------------------------------------------------------------------------
+					5       0       uptimelog       /home/user/uptimelog
+					----------------------------------------------------------------------------
+					6. Run all anacronjobs regardless of their last run timestamp.
+
+					[root@localhost] anacron -f
+					----------------------------------------------------------------------------
+					7. View the anacron timestamps for your uptimelog job.
+
+					[root@localhost]# cat /var/spool/anacron/uptimelog
+					----------------------------------------------------------------------------
+					8. Using the same /home/user/uptimelog script, schedule the script to run once a day using cron.
+
+					[root@localhost]# cp /home/user/uptimelog /etc/cron.daily/
+					----------------------------------------------------------------------------
+					9. Create a custom scheduled cron that runs the uptimelog every 5 minutes. 
+
+					[root@localhost]# vim /etc/cron.d/uptimelog
+
+					*/5 * * * * root /home/user/uptimelog
+					----------------------------------------------------------------------------
+
+
+	20)Docker/Kubernetes Installation------------------------------------------------------------------------------------
+
+
+			apt-get update
+			apt-get install     apt-transport-https     ca-certificates     curl     gnupg-agent software-properties-common
+
+			curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+			add-apt-repository    "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+			   $(lsb_release -cs) \
+			   stable"
+			  
+			apt-get update
+			apt-get install docker-ce docker-ce-cli containerd.io
+			docker ps
+				----------------------------------------------------------------------------
+
+			apt-get update && sudo apt-get install -y apt-transport-https gnupg2
+			curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+			echo "deb https://apt.kubernetes.io/ kubernetes-xenial main" | tee -a /etc/apt/sources.list.d/kubernetes.list
+			apt-get update
+			apt-get install -y kubectl
+
+
+	21)------------------------------------------------------------------------------------
+ 				
+			1) How would you dump the contents of the /var/log/messages file into standard output, grep for all lines that contain 	"Memory" and then redirect the grep'ed result to /home/user/log.txt?
+
+			cat /var/log/messages | grep -i memory > /home/user/log.txt
+
+
+
+	22)------------------------------------------------------------------------------------
+
+
+				1. Attach a LinuxAcademy.com external device (mount) to the lab server.
+				Create two partitions 500M each on the device.
+
+				
+
+				[root@localhost dev]# fdisk /dev/xvdfWelcome to fdisk (util-linux 2.23.2).
+
+				Changes will remain in memory only, until you decide to write them.
+				Be careful before using the write command.
+
+				 
+
+				Command (m for help): n
+				Partition type:
+
+				   p   primary (0 primary, 0 extended, 4 free)
+				   e   extended
+
+				Select (default p): 
+				Using default response p
+				Partition number (1-4, default 1): 
+				
+				First sector (2048-2097151, default 2048):  
+				Using default value 2048
+				Last sector, +sectors or +size{K,M,G} (2048-2097151, default 2097151): +500M
+				Partition 1 of type Linux and of size 500 MiB is set
+
+				 
+
+				Command (m for help): n
+				Partition type:
+
+				   p   primary (1 primary, 0 extended, 3 free)
+				   e   extended
+
+				Select (default p): 
+				Using default response p
+
+				Partition number (2-4, default 2): 
+				First sector (1026048-2097151, default 1026048): 
+				Using default value 1026048
+				Last sector, +sectors or +size{K,M,G} (1026048-2097151, default 2097151): +500M
+				Partition 2 of type Linux and of size 500 MiB is set
+
+				 
+
+				Command (m for help): w
+				The partition table has been altered!
+
+				 
+
+				Calling ioctl() to re-read partition table.
+
+				Syncing disks.
+
+				[root@localhost dev]# 
+
+				3. On the xvdf1 partition create an XFS file system.
+
+				[root@localhost dev]# mkfs -t xfs xvdf1
+				----------------------------------------------------------------------------
+
+				4. On the xvdf2 partition create an EXT4 file system.
+
+				[root@localhost dev]# mkfs -t ext4  xvdf2
+				----------------------------------------------------------------------------
+
+				5. On the xvdf1 partition label the filesystem as "filesystem1".
+
+				[root@localhost dev]# xfs_admin -L "filesystem1" /dev/xvdf1
+
+				[root@localhost dev]# xfs_admin -l /dev/xvdf1
+
+				label = "filesystem1"
+
+				----------------------------------------------------------------------------
+				6. On the xvdf2 partition label the filesystem as "filesystem2".
+
+				[root@localhost dev]# tune2fs -L "filesystem2" /dev/xvdf2
+
+				or
+
+				[root@localhost dev]# e2label /dev/xvdf2
+
+				filesystem2
+
+				----------------------------------------------------------------------------
+
+				7. Create a persistent mount in the /etc/fstab file with defaults as the mount option for the xvdf1 partition and use the mount point /mnt/mount1.
+
+				LABEL=filesystem1 /mnt/mount1 xfs defaults 1 2 
+
+				----------------------------------------------------------------------------
+				8. Create a persistent mount in the /etc/fstab file with defaults as the mount option for the xvdf2 partition and use the mount /mnt/mount2. Set the fsck check to 2 and the dump to 1.
+
+				LABEL=filesystem2 /mnt/mount2 ext4 defaults 1 2 
+				----------------------------------------------------------------------------
+
+	23)DISK ------------------------------------------------------------------------------------
+
+					1. Start a Red Hat 7 LinuxAcademy.com lab server and "mount" a new disk. Once completed, log into the system and navigate to the /dev directory.
+
+					[root@localhost]# cd /dev
+					----------------------------------------------------------------------------
+					2. Create a primary Linux partition that is 500M in size on the attached disk.
+
+					[root@anthony1 dev]# gdisk xvdf
+
+					GPT fdisk (gdisk) version 0.8.6
+
+					Partition table scan:
+
+					  MBR: not present
+					  BSD: not present
+					  APM: not present
+					  GPT: not present
+
+					Creating new GPT entries.
+					Command (? for help): n
+
+					Partition number (1-128, default 1): 
+					First sector (34-2097118, default = 2048) or {+-}size{KMGTP}: 
+					Last sector (2048-2097118, default = 2097118) or {+-}size{KMGTP}: +500M
+					Current type is 'Linux filesystem'
+					Hex code or GUID (L to show codes, Enter = 8300): 8300
+					Changed type of partition to 'Linux filesystem'
+					----------------------------------------------------------------------------
+					3. Write changes and exit.
+
+					Command (? for help): w
+
+					Final checks complete. About to write GPT data. THIS WILL OVERWRITE EXISTING
+					PARTITIONS!!
+
+					Do you want to proceed? (Y/N): Y
+					OK; writing new GUID partition table (GPT) to xvdf.
+					The operation has completed successfully.
+					----------------------------------------------------------------------------
+					4. Issue the command to list the block device and it's UUID (Universally Unique IDentifier).
+
+
+					[root@localhost dev]# blkid
+					----------------------------------------------------------------------------
+					5. Create an XFS filesystem on the disk.
+
+
+					[root@localhost dev]# mkfs -t xfs /dev/xvdf1.
+					----------------------------------------------------------------------------
+					6. Mount the partition to /mnt/mymount.
+
+
+					[root@localhost dev]# mkdir /mnt/mymount
+					[root@localhost dev]# mount /dev/xvdf1 /mnt/mymount
+					----------------------------------------------------------------------------
+					7. Configure the disk to mount automatically during system boot to the /mnt/mymount mount point.
+
+					[root@localhost dev]# blkid
+					/dev/xvdf1: UUID="" TYPE="xfs" 
+					[root@anthony1 dev]# vim /etc/fstab 
+
+					UUID="your uuid here" /mnt/mymount        xfs     defaults 1 1
+					[root@anthony1 dev]# umount /mnt/mymount
+					[root@anthony1 dev]# mount -a
+
+					[root@anthony1 dev]# df -h
+
+					Filesystem      Size  Used Avail Use% Mounted on
+					/dev/xvda2      6.0G  3.9G  2.1G  65% /
+					devtmpfs        482M     0  482M   0% /dev
+					tmpfs           497M   13M  484M   3% /run
+					tmpfs           497M     0  497M   0% /sys/fs/cgroup
+					/dev/xvdf1      497M   26M  472M   6% /mnt/mymount
+
+	24)Interrupt Boot Process------------------------------------------------------------------------------------
+
+
+			1. Start or reboot a system to get to the boot menu.
+			2. Press any key to stop the auto selection of a grub item.
+			3. Ensure the kernel you intend to boot into is highlighted and press the “e” key to edit the entry.
+			4. Navigate to the linux16 kernel line and hit the “end” key to go to the end of the line.
+			5. Append the new target to the linux16 kernel line.
+			   systemd.unit=rescue.target
+			6. Continue booting into the system.
+      		crtl +x
+	  
+	25)CPU Load Average------------------------------------------------------------------------------------
+
+			  		1. View the system uptime and load average.
+
+					
+					[root@localhost ~]# uptime
+
+					 09:53:07 up 16:32,  3 users,  load average: 1.02, 1.00, 0.69
+					[root@localhost ~]# 
+					----------------------------------------------------------------------------
+					2. View the system uptime and load average that also shows what users are logged into the system and what the user is doing.
+
+					[root@localhost ~]# w
+
+					 09:53:37 up 16:33,  3 users,  load average: 1.01, 1.00, 0.70
+					USER     TTY        LOGIN@   IDLE   JCPU   PCPU WHAT
+					user  pts/1     09:18    1.00s  0.10s  5.32s /usr/libexec/gnome-terminal-server
+					[root@localhost ~]# 
+					----------------------------------------------------------------------------
+					3. Using the proc file system and wc,display the number of processors your system has. This is important in order to calculate the load average of the system. (Please note your number of CPUs will vary depending on your system and may not match the exact lab number.)
+
+					
+					[root@localhost]# grep "model name" /proc/cpuinfo | wc -l
+					----------------------------------------------------------------------------
+					4. Calculate the 1, 5, and 15 minute load averages for the system.
+
+					There are two processors as a result of our previous command.
+
+					[root@localhost ~]# grep "model name" /proc/cpuinfo | wc -l 2
+					[root@localhost ~]# 
+
+					For each processor 1 is 100%. If you have 1 processor and your load average is 1.2 then your load is greater than 100%. If you have 2 processors and your load is 2 then your load is 100%. Below we are going to learn how to calculate this number.
+
+					[root@localhost ~]# uptime
+
+					 09:42:20 up 16:21,  3 users,  load average: 1.04, 0.72, 0.35
+
+					Per CPU load average calculation formula: load average / # of cpu
+
+					Per CPU load average calculation 1 Minute load average: 1.04 / 2 = 52%
+
+					Per CPU load average calculation 5 Minute load average: .72 / 2 = 36%
+
+					Per CPU load average calculation 15 Minute load average: .35 / 2 = 17.5%
+
+                   
+
+	26)LVM Practice------------------------------------------------------------------------------------
+
+	  					1     cd /dev
+						2     ls
+						3     fdisk /dev/xvdf
+						4     gdisk /dev/xvdf
+						5     gdisk /dev/xvdg
+						6     pvcreate /dev/xvdf1 /dev/xvdg1
+						7     vgdisplay 
+						8     pvdisplay 
+						9     vgcreate battlestar /dev/xvdf1 /dev/xvdg1
+						10    vgs
+						11    vgdisplay 
+						12    vgdisplay -vv
+						13    vgdisplay -v
+						14    lvcreate -n  ijazlv -L 20G battlestar 
+						15    lvs
+						16    cd battlestar/
+						17    ls
+						18    ls -al
+						19    file ijazlv
+						20    mkfs.xfs ijazlv 
+						21    mkdir /mnt/mydir
+						22    mount ijazlv /mnt/mydir/
+						23    cd /mnt/mydir/
+						24    ls
+						25    touch file1
+						26    touch file2
+						27    touch file4
+						28    ls
+						29    df -h
+						30    gdisk /dev/xvdj
+						31    partprobe 
+						32    pvcreate /dev/xvdj1
+						33    vgextend battlestar /dev/xvdj1
+						34    vgs
+						35    vgdisplay 
+						36    vgdisplay -v
+						37    lvextend -L 59G /dev/battlestar/ijazlv 
+						38    lvs
+						39    lvdisplay 
+						40    df -h
+						41    xfs_growfs /mnt/mydir/
+						42    df -h
+						43    exit
+
+	27)LVM Disk Replacemnt------------------------------------------------------------------------------------
+
+
+
+						     fdisk /dev/xvdf
+						     pvcreate /dev/xvdf1
+						     vgcreate battlestar /dev/xvdf1
+						     lvcreate -n mylv -L 1G battlestar 
+						      lvs
+						      lvdisplay 
+						      mkfs -t xfs /dev/battlestar/mylv
+						      mkdir /mnt/mydir
+						      mount /dev/battlestar/mylv /mnt/mydir
+						      cd /mnt/mydir/
+						      touch file{1,2,3,4,5}
+						     ls
+						      gdisk /dev/xvdg
+						      pvcreate /dev/xvdg1
+						     vgextend battlestar /dev/xvdg1
+						     vgs
+						     vgdisplay -v
+						     pvmove /dev/xvdf1 
+						     vgreduce battlestar /dev/xvdf1 
+						     ls
+						     ls /mnt/mydir/
+						     exit
+
+	28)TOP / Linux OS Monitoring--------------------------------------------------------------------------------
+
+
+						1. On a LinuxAcademy.com lab server start the top program.
+
+						[root@localhost]# top
+						----------------------------------------------------------------------------
+						2. The top program shows all running processes on the system but sorts them. Using your keyboard, browse up and down to view the processes.
+
+						Use the keyboard up and down arrows to navigate
+						----------------------------------------------------------------------------
+						3. Sort all processes by memory percentage.
+
+						shift + m
+						----------------------------------------------------------------------------
+						4. Sort all processes by CPU usage.
+
+						shift + p
+						----------------------------------------------------------------------------
+						5. Renice the process for the script started at the beginning of the exercise. The command will be  "bash" displayed in the top program. Set the nice level to -20.
+
+						Press the "r" key, enter the process id of the process you want to renice, and set the nice level.
+						----------------------------------------------------------------------------
+						6. Kill the bash script using top.
+
+						Press the "k" key and enter the process id to kill then press enter.
+						----------------------------------------------------------------------------
+
+
+	29)MBR Practice--------------------------------------------------------------------------------
+
+		               This lab utilized the Linux Academy lab server "mount" feature to work with partitions.
+
+						Master Boot Record partitions are partitions managed with fdisk. MBR partitions have been in use for many years and are slowly being replaced with GPT partitions. MBR partitions can only have 4 primary partitions up to 2 TiB in size each. This is a severe limitation in today's environments, where 2 TiB is not a lot of data. However, MBR is used on servers still today.
+
+						1. Start a Red Hat 7 lab server and "mount" a new disk. Once completed, log into the system and navigate to the /dev directory.
+
+						    cd /dev
+						----------------------------------------------------------------------------
+						2. Create a primary Linux partition that is 500M in size on the attached disk.
+
+						    fdisk xvdf
+
+						    Command (m for help): n
+						    Partition type:    p   primary (0 primary, 0 extended, 4 free)    e   extended Select (default p): p
+						    Partition number (1-4, default 1):
+						    First sector (2048-2097151, default 2048):
+						    Using default value 2048
+						    Last sector, +sectors or +size{K,M,G} (2048-2097151, default 2097151): +500M
+						    Partition 1 of type Linux and of size 500 MiB is set
+						    Command (m for help): 
+						----------------------------------------------------------------------------
+						3. Set the partition type for a basic Linux volume.
+
+						    Command (m for help): t
+						    Selected partition 1 Hex code (type L to list all codes): 83
+
+						    Changed type of partition 'Linux' to 'Linux' (notice the default is already Linux).
+						----------------------------------------------------------------------------
+						4. Write changes and exit.
+
+						    Command (m for help): w
+						    The partition table has been altered! Calling ioctl() to re-read partition table. Syncing disks.
+						----------------------------------------------------------------------------
+						5. Issue the command to list the block device and it's UUID (Universally Unique Identifier).
+
+						    blkid
+						----------------------------------------------------------------------------
+						6. Create an XFS filesystem on the disk.
+
+						    mkfs -t xfs /dev/xvdf1
+						----------------------------------------------------------------------------
+						7. Mount the partition to /mnt/mymount.
+
+						    mkdir /mnt/mymount
+						    mount /dev/xvdf1 /mnt/mymount
+						    df -h
+
+						    Filesystem      Size  Used Avail Use% Mounted on
+						    /dev/xvda2      6.0G  3.9G  2.1G  65% /
+						    devtmpfs        482M     0  482M   0% /dev
+						    tmpfs          497M     0  497M   0% /dev/shm
+						    tmpfs           497M   13M  484M   3% /run
+						    tmpfs          497M     0  497M   0% /sys/fs/cgroup
+						    /dev/xvdf1 497M   26M  472M   6% /mnt/mymount
+						----------------------------------------------------------------------------
+						8. Configure the disk to mount to the /mnt/mymount mount point automatically during system boot.
+
+						    blkid
+						    /dev/xvdf1: UUID="" TYPE="xfs" 
+
+						    vim fstab
+						    UUID="your uuid here" /mnt/mymount xfs defaults 1 1
+
+						    umount /mnt/mymount
+						    mount -a
+						    df -h
+
+						    Filesystem Size Used Avail Use% Mounted on
+						    /dev/xvda2 6.0G 3.9G 2.1G 65% /
+						    devtmpfs 482M 0 482M 0% /dev
+						    tmpfs 497M 13M 484M 3% /run
+						    tmpfs 497M 0 497M 0% /sys/fs/cgroup
+						    /dev/xvdf1 497M 26M 472M 6% /mnt/mymount
+						
+
+	30)Networking --------------------------------------------------------------------------------
+						1. View the current hostname.
+
+						
+						[root@anthony1 ~]# hostname
+						----------------------------------------------------------------------------
+						2. Set temporary hostname in the shell to "myserver.domain.com".
+
+						
+						[root@anthony1 ~]# hostname myserver.domain.com; exec bash
+						----------------------------------------------------------------------------
+						3. For the "System eth0" connection, add the following DNS for the resolv.conf file 8.8.8.8. 
+						Ensure the changes are persistent after a reboot.
+
+						
+						[root@anthony1 ~]# nmcli con mod "System eth0" +ipv4.dns 8.8.8.8
+						----------------------------------------------------------------------------
+						4. Modify your hostname to ensure it is a permanent change on the system (persistent and will survive reboots).
+
+						Note: You can edit the /etc/hostname file or perform the following command.
+
+						
+						[root@anthony1 ~]# hostnamectl set-hostname myserver.domain.com
+						----------------------------------------------------------------------------
+						5. Add a file based host entry so the domain linuxacademy.com points to 10.0.0.1
+
+						[root@anthony1 ~]# echo "10.0.0.1 linuxacademy.com" >> /etc/hosts
+						[root@anthony1 ~]# getent hosts linuxacademy.com
+
+						10.0.0.1        linuxacademy.com
+						----------------------------------------------------------------------------
+						6. Open the correct file that determines the lookup order of DNS (file based vs external).
+
+
+						[root@anthony1 ~]# vim /etc/nsswitch.conf
+						----------------------------------------------------------------------------
+						7. View TCP ports on the system that are listening for connections and view ports that have established connections. 
+
+						[root@anthony1 ~]# ss -tan
+						
+
+	31)umask Practice--------------------------------------------------------------------------------
+
+					1. View current umask permissions and then, for the current shell session, set umask permissions to 0.
+
+						[root@localhost ~]# umask
+
+						0022
+
+						[root@localhost ~]# umask 0
+						[root@localhost ~]# umask
+
+						0000
+
+						[root@localhost ~]# 
+
+						Note: umask will add leading zeros
+						
+						----------------------------------------------------------------------------
+						2. Navigate into the /tmp directory and touch file1 and dir1 and view current permissions.
+
+						[root@localhost user]# cd /tmp
+						[root@localhost tmp]# touch file1
+						[root@localhost tmp]# mkdir dir1
+						[root@localhost tmp]# ls -l
+
+						total 0
+
+						drwxrwxrwx. 2 root root 6 May  1 11:10 dir1
+						-rw-rw-rw-. 1 root root 0 May  1 11:10 file1 
+						[root@localhost tmp]# 
+						
+						----------------------------------------------------------------------------
+						3. Mask permissions for the "other" users to write a file when created, then touch file2 and view permissions.
+
+						Tip: If file permissions start at 666 and you want to "remove/mask" permissions for other users to read and write,
+						then you will need to subtract the octoal notation representing write permissions which is 2. 
+
+						[root@localhost tmp]# umask 002
+						[root@localhost tmp]# touch file2
+						[root@localhost tmp]# ls -l
+
+						total 0
+
+						drwxr-xr-x. 2 root root 6 May  1 11:10 dir1
+						-rw-rw-rw-. 1 root root 0 May  1 11:10 file1
+						-rw-rw-r--. 1 root root 0 May  1 11:13 file2
+						[root@localhost tmp]# 
+
+						Tip: umask 002 resulting in default permissions on newly created files of 664 (no execute and you "masked" write permissions).
+
+						----------------------------------------------------------------------------
+						4. Mask write access for group members and the write for "other" permissions, then touch file3 and view permissions.
+
+						[root@localhost tmp]# umask 022
+						[root@localhost tmp]# touch file3
+						[root@localhost tmp]# ls -l
+						-rw-r--r--. 1 root root 0 May  1 11:16 file3
+						[root@localhost tmp]# 
+						----------------------------------------------------------------------------	
+						5. Mask read and write permissions for the owner of a file and leave read/write for both group 
+						and other permissions, then touch file4 and mkdir dir3 and view permissions.
+
+						[root@localhost tmp]# umask 600
+						[root@localhost tmp]# touch file4
+						[root@localhost tmp]# mkdir dir3
+						[root@localhost tmp]# ls -l
+						total 0
+
+						d--xrwxrwx. 2 root root 6 May  1 11:18 dir3
+						----rw-rw-. 1 root root 0 May  1 11:18 file4
+
+						[root@localhost tmp]# 
+						----------------------------------------------------------------------------
+						6. Mask all permissions including execute permissions on new directories, then touch file5.
+
+						[root@localhost tmp]# umask 777
+						[root@localhost tmp]# touch file5
+
+						Tip: Setting umask 666 would mask all permissions on files but leave execute on directories. 
+						Directories need execute permissions in order for someone to "change into the directory".
+
+						----------------------------------------------------------------------------
+
+						7. Mask read/write access for group for non-privileged users and other permissions and make these changes persistent.
+
+						[root@localhost ]#     vim /etc/bashrc
+
+						if [ $UID -gt 199 ] && [ "`id -gn`" = "`id -un`" ]; then
+						    umask 066
+						else
+						    umask 022
+
+						fi
+						----------------------------------------------------------------------------
+						[root@localhost ]#     vim /etc/profile
+
+						if [ $UID -gt 199 ] && [ "`id -gn`" = "`id -un`" ]; then
+
+						    umask 066
+						else
+						    umask 022
+						fi
+
+						Note: In order for users to have sudo privileges (a privileged user), they generally will have a 
+						primary group of "wheel". What the script says if the primary/effective group does not match the username  
+						(remember generally users primary/effective group will be the same as the username) then consider 
+						the user a privileged user.
+
+						----------------------------------------------------------------------------
+
+
+	31)Virtualization Installation--------------------------------------------------------------------------------
+
+						1. Download and install the proper packages in order to manage virtual machines on a Red Hat 7 machine. 
+						Ensure you install the GUI as well as the command line interface.
+
+						[root@localhost]# yum install virt-manager qemu-kvm qemu-img libvirt libvirt-python python-virtinst libvirt-client
+
+						OR Note: This is a neat trick
+
+						[root@localhost]# yum grouplist hidden // This will show virtualization packages
+						[root@localhost]# yum groupinstall "Virtualization Client"
+						[root@localhost]# yum groupinstall "Virtualization Tools"
+						[root@localhost]# yum groupinstall "Virtualization Platform"
+
+						Note: This will prevent you from having to memorize packages or as a backup in the exam if you 
+						forget the packages required.
+						----------------------------------------------------------------------------
+						2. Ensure that the virtual machine services start when the system boots and is currently running.
+
+
+						[root@localhost]# systemctl start libvirtd
+						[root@localhost]# systemctl enable libvirtd
+
+						Hint: In the exam if you have to start a service ALWAYS enable the service. 
+						----------------------------------------------------------------------------
+						3. Create a CentOS based virtual machine using the GUI.
+
+						
+						[root@localhost]# virt-manager
+						----------------------------------------------------------------------------
+						4. Configure the virtual machine to auto start whenever the system starts. 
+
+						
+						[root@localhost]# virsh
+						[root@localhost]# virsh autostart vmname
+						
+						OR
+
+						At the virsh commandline
+
+						Virsh # autostart vmname
+						----------------------------------------------------------------------------
+						5. Reboot and test the configuration.
+
+						[root@localhost]# reboot
+						
+
+	32)Recover Root Password--------------------------------------------------------------------------------
+
+					1. Start or reboot a system to get into the boot menu.
+					2. Press any key to stop the auto selection of a menu item.
+					3. Ensure the kernel you intend to boot into is highlighted and press the "e" key to edit the entry.
+					4. Navigate to the linux16 kernel line and hit the "end' key to go to the end of the linux16 line.
+					5. Append rd.break to the linux16 kernel line.
+					6. Hit crtl + x to continue.
+					7. The system will boot into an emergency mode that has the /sysroot directory mounted as read only.
+					8. Mount the /sysroot directory with read and write permissions.
+					mount -oremount, rw /sysroot
+
+					9. Switch into chroot jail and set the /sysroot as the root file system.
+					chroot /sysroot
+
+					10. Reset the root password.
+					passwd root
+
+					11. Clean up, -> Make sure that all unlabled files get relabeled during the boot process (for SELinux).
+					touch /.autorelabel 
+
+					12. Exit chroot jail.
+					exit
+
+					13. Exit the initramfs debug shell.
+					exit
+
+
+	33)Linux Time Service--------------------------------------------------------------------------------
+
+				1. Login to the lab server and determine which timezone should be used based on your location.
+
+				[root@localhost]# tzselect 
+				or 
+				[root@localhost]# timedatectl list-timezones
+				----------------------------------------------------------------------------
+				2. Update the system's timezone to reflect the selected timezone.
+
+				[root@localhost]# timedatectl set-timezone American/Chicago
+				----------------------------------------------------------------------------
+				3. Update the systemtime to match your current local time.
+
+				[root@localhost]# timedatectl set-time 02:00:00
+				----------------------------------------------------------------------------
+				4. Display current time and date information.
+
+				[root@localhost]# timedatectl
+				----------------------------------------------------------------------------
+				5. Update the NTP time services to be 0.pool.ntp.org, 1.pool.ntp2.org, 2.pool.ntp.org, and 3.pool.ntp.org.
+
+				[root@localhost]# vim /etc/chrony.conf
+
+				# Use public servers from the pool.ntp.org project.
+				# Please consider joining the pool (http://www.pool.ntp.org/join.html).
+
+				server 0.pool.ntp.org iburst
+				server 1.pool.ntp.org iburst
+				server 2.pool.ntp.org iburst
+				server 3.pool.ntp.org iburst
+				----------------------------------------------------------------------------
+				6. Apply the changes to the chronyd service.
+
+				[root@localhost]# systemctl restart chronyd
+				----------------------------------------------------------------------------
+				7. Verify the new time servers are properly working with chronyd.
+
+				[root@localchost] chronyc sources -v	
+				
+
+
+	34)Pkill Jobs--------------------------------------------------------------------------------
+
+
+						1. As the root user, create a job running in the background of your current terminal. Execute this following script for that program process to be created.
+
+						[root@localhost]# (while true; do echo -n "My program" >> ~/output.file; done) &
+						----------------------------------------------------------------------------
+						2. View the current jobs running in the background of your terminal.
+
+						[root@localhost ~]# jobs
+						[1]-  Running   ( while true; do< echo -n "My program" >> ~/output.file; done ) &
+						----------------------------------------------------------------------------
+						3. Stop the process from running without killing the process using the kill command.
+
+						[root@localhost]# kill -SIGSTOP %1 (%1 is the job number, if the job was 2 it would be %2)
+						----------------------------------------------------------------------------
+						4. View the stopped jobs in the background.
+
+						[root@localhost ~]# jobs
+
+						[1]+  Stopped     ( while true; do echo -n "My program" >> ~/output.file; done ) &
+
+						[root@localhost ~]#  
+						----------------------------------------------------------------------------
+						5. Start the process again using the kill command.
+
+						[root@localhost]# kill -SIGCONT %1
+						----------------------------------------------------------------------------
+						6. Kill the process without allowing any blocking of the kill command.
+
+						[root@localhost]# kill -SIGKILL %1
+
+						Exercise 2:
+
+							1. Download and install the httpd service.
+
+							[root@localhost]# yum install httpd
+							----------------------------------------------------------------------------
+							2. Start the httpd service (or ensure that it is running).
+
+							[root@localhost]# systemctl start httpd
+							----------------------------------------------------------------------------
+							3. As the root user, grep for all processes that are running as the root user and display the process names.
+
+							[root@localhost]# pgrep -u root -l
+							----------------------------------------------------------------------------
+							4. As the user "user", start the "vi" program at the terminal.
+
+							[user@localhost]# vi
+							----------------------------------------------------------------------------
+							5. As the root user, in your second terminal window grep for all processes running under the user "user".
+
+							[root@localhost ~]# pgrep -u user -l vi
+							3690 dconf-service
+							3694 vim
+							----------------------------------------------------------------------------
+							6. As the root user, grep for the httpd process.
+
+							[root@localhost]# pgrep httpd
+							----------------------------------------------------------------------------
+							7. As the root user, kill all of the user "user"'s processes and boot that user from the system.
+
+						[root@localhost ~]# w
+						 14:15:59 up 20:55,  4 users,  load average: 0.00, 0.01, 0.05
+						USER     TTY        LOGIN@   IDLE   JCPU   PCPU WHAT
+						user pts/0     Mon22    2:58m  0.05s  0.05s bash
+						[root@localhost ]# pkill -t pts/0 
+
+						This will kill every process started from the user's terminal but it will not boot the user. Now find all 
+						running processes left which should either be bash or ssh.
+
+						[root@localhost]# pgrep -u user
+						[root@localhost]# pkill -u user ssh
+						or 
+						[root@localhost]# pkill ssh
+						
+
+	35)Nice Process Proiority--------------------------------------------------------------------------------
+
+						1. Ensure that you have the httpd package installed on the system.
+
+						[root@localhost]# yum install httpd
+						----------------------------------------------------------------------------
+						2. Ensure the httpd service is NOT RUNNING.
+
+						[root@localhost]# systemctl stop httpd
+						----------------------------------------------------------------------------
+						3. Start the httpd service with the most favorable nice possible.
+
+						[root@localhost]# nice -n -20 httpd
+						----------------------------------------------------------------------------
+						4. View the current nice of the httpd service using the ps command and pgrep command together.
+
+						[root@localhost]# ps axo pid,comm,nice | grep httpd 
+
+						or 
+
+						[root@localhost]# ps axo pid,comm,nice --sort=-nice | grep httpd 
+						This will allow you to sort by nice level.
+						----------------------------------------------------------------------------
+						6. Renice all httpd processes and set the nice level to 0.
+
+						[root@localhost]# renice -n 0 $(pgrep httpd)
+
+
+	35)ISCSI--------------------------------------------------------------------------------
+					#initiator/client 
+
+					      yum install iscsi-initiater-utils
+					      yum install iscsi-initiator-utils
+					      vi /etc/iscsi/initiatorname.iscsi 
+					      vi /etc/iscsi/iscsid.conf 
+					      systemctl start iscsi
+					      systemctl enable iscsi
+					      iscsiadm --mode discovery --type sendtargets --portal 172.31.115.93
+					      iscsiadm --mode node --target iqn.2015-05.com.mylabserver:t1 --portal 172.31.115.93 --login 
+					      lsblk --iscsi
+					      lsblk --scsi
+					      lsblk 
+					      df -h
+					      fdisk -l
+					      mkfs.ext4 /dev/sda 
+					      blkid
+					      vi /etc/fstab 
+					      mkdir -p /mnt/iscsi
+					      mount -a
+					      df -hT
+					      history 
+					      cd /mnt/iscsi/
+					      touch test1
+					      iscsiadm -m session -P 3
+					      umount /mnt/iscsi/
+
+
+					#server/target , configuration done using iscsiadm not shown here
+					  
+						    yum -y install targetcli
+						    systemctl enable target
+						  	fdisk -l
+						  	targetcli 
+						    cat /etc/target/saveconfig.json 
+						    less /etc/target/saveconfig.json 
+						    yum -y install firewalld
+						    firewall-cmd --permanent --add-port=3260/tcp 
+						    systemctl enable firewalld
+						    systemctl start firewalld
+						    firewall-cmd --permanent --add-port=3260/tcp 
+						    firewall-cmd --get-default-zone 
+						    firewall-cmd --list-all
+						    firewall-cmd --reload 
+						    firewall-cmd --list-all
+						    systemctl start target
+						    systemctl status target
+						    systemctl status target -l
+						  
+					  
+					/iscsi> ls
+					o- iscsi ............................................................................. [Targets: 1]
+					  o- iqn.2015-05.com.mylabserver:t1 ..................................................... [TPGs: 1]
+					    o- tpg1 ................................................................ [no-gen-acls, no-auth]
+					      o- acls ........................................................................... [ACLs: 1]
+					      | o- iqn.2015-05.com.mylabserver:client .................................... [Mapped LUNs: 1]
+					      |   o- mapped_lun0 ............................................. [lun0 block/testblock1 (rw)]
+					      o- luns ........................................................................... [LUNs: 1]
+					      | o- lun0 .................................................... [block/testblock1 (/dev/xvdf)]
+					      o- portals ..................................................................... [Portals: 1]
+					        o- 0.0.0.0:3260 ...................................................................... [OK]
+					/iscsi> 
+
+
+
+
+		35)System Usage Use Case --------------------------------------------------------------------------------
+
+
+						1. Create a directory in your home directory called "reports". Create a file called 'systemuse.rep' using any method you choose.
+
+						    root@tcox1:~# mkdir reports
+
+						    root@tcox1:~# cd reports
+
+						    root@tcox1:~/reports# echo "SYSTEM USAGE REPORT - TODAY'S DATE HERE" >> systemuse.rep
+
+						 
+						    ----------------------------------------------------------------------------
+						 
+						2. Run a command that pipes it's output to the 'systemuse.rep' file. The command should display all current commands being run by the user in the current shell.
+
+						     root@tcox1:~/reports# echo "PROCESSES BY USER IN TERMINAL" >> systemuse.rep && ps >> systemuse.rep
+
+						 ----------------------------------------------------------------------------
+
+						3. Using the appropriate command, append to the 'systemuse.rep' file the system load and all mount points present on the system, in 'human readable' format.
+
+						    root@tcox1:~/reports# echo "CURRENT MOUNT DRIVES AND MOUNTS IN READABLE FORMAT" >> systemuse.rep && df -h >> systemuse.rep 
+
+						    root@tcox1:~/reports# echo "CURRENT SYSTEM LOAD" >> systemuse.rep && w >> systemuse.rep
+
+						 ----------------------------------------------------------------------------
+
+						4. List all the directories in the /var directory such that their total disk usage, by directory, is appended to the 'systemuse.rep' file, again in 'human readable' format.
+
+						    echo "DISK USAGE IN VAR, BY DIRECTORY, BY SIZE" >> systemuse.rep && du -sch /var/* | sort >> systemuse.rep 
+
+						 
+
+						5. Run the appropriate command to show the available memory in the system, in megabytes, appended to the 'systemuse.rep' file.
+
+						    root@tcox1:~/reports# echo "AVAILABLE MEMORY, IN MEGABYTES" >> systemuse.rep && free -m >> systemuse.rep
+
+						 
+
+						6. Display the 'systemuse.rep' file to verify it contains the output expected from Steps #1 through #5.
+
+						root@tcox1:~/reports# cat systemuse.rep 
+
+						    SYSTEM USAGE REPORT - TODAY'S DATE HERE
+
+						    PROCESSES BY USER IN TERMINAL
+
+						      PID TTY          TIME CMD
+
+						     1932 pts/1    00:00:00 su
+
+						     1933 pts/1    00:00:00 bash
+
+						     4927 pts/1    00:00:00 ps
+
+						    CURRENT MOUNT DRIVES AND MOUNTS IN READABLE FORMAT
+
+						    Filesystem      Size  Used Avail Use% Mounted on
+
+						    /dev/xvda1       15G  2.4G   12G  17% /
+
+						    none            4.0K     0  4.0K   0% /sys/fs/cgroup
+
+						    udev            492M   12K  492M   1% /dev
+
+						    tmpfs           100M  804K   99M   1% /run
+
+						    none            5.0M     0  5.0M   0% /run/lock
+
+						    none            497M   80K  497M   1% /run/shm
+
+						    none            100M   16K  100M   1% /run/user
+
+						    CURRENT SYSTEM LOAD
+
+						     17:01:30 up  1:09,  2 users,  load average: 0.00, 0.01, 0.05
+
+						    USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT
+
+						    user     pts/1    99-198-189-168.m 15:52    2.00s  0.18s  0.02s sshd: user [priv]   
+
+						    DISK USAGE IN VAR, BY DIRECTORY, BY SIZE
+
+						    0 /var/lock
+
+						    0 /var/run
+
+						    163M /var/lib
+
+						    20K /var/crash
+
+						    20K /var/www
+
+						    4.0K /var/backups
+
+						    4.0K /var/local
+
+						    4.0K /var/mail
+
+						    4.0K /var/opt
+
+						    4.0K /var/tmp
+
+						    44K /var/spool
+
+						    500M /var/cache
+
+						    669M total
+
+						    7.0M /var/log
+
+						    AVAILABLE MEMORY, IN MEGABYTES
+
+						                 total       used       free     shared    buffers     cached
+
+						    Mem:           992        626        365          1         31        361
+
+						    -/+ buffers/cache:        234        758
+
+						     
+
+						    Swap:            0          0          0
+
+						     
+
+						BONUS: Prepend the output of each command above with a comment, in CAPS, that explains the section you are adding.
+
+						    BONUS Solution was added to each command line above (the ECHO statements).
+
+
+
+Syro@43210$
+
+
+
+
+
+
+
+
+
+					    
+
+
